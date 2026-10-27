@@ -1,0 +1,20 @@
+{
+  "name": "wujie-wenda",
+  "version": "1.0.0",
+  "private": true,
+  "description": "无界问答 —— 论文 · 无限画布 · 划词讲解",
+  "scripts": {
+    "setup": "cd server && npm install && cd ../client && npm install",
+    "dev": "concurrently -n server,client -c yellow,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "cd client && npm run build",
+    "start": "cd server && npm start",
+    "test": "npm run test:server && npm run test:client",
+    "test:server": "cd server && npm test",
+    "test:client": "cd client && npm test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

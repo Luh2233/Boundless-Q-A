@@ -1,0 +1,8 @@
+# 统一按 LF 存储，避免 Windows 下 CRLF 造成的整树假 diff
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

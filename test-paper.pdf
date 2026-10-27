@@ -1,0 +1,81 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 2255 >>
+stream
+BT
+/F1 16 Tf 1 0 0 1 56 736 Tm (Understanding Diffusion Models: A Minimal Reading Guide) Tj
+/F1 12 Tf 1 0 0 1 56 706 Tm (Abstract) Tj
+/F1 11 Tf 1 0 0 1 56 686.5 Tm (Diffusion models learn to generate data by gradually reversing a fixed noising process.) Tj
+/F1 11 Tf 1 0 0 1 56 671 Tm (Starting from pure Gaussian noise, a neural network is trained to predict the noise) Tj
+/F1 11 Tf 1 0 0 1 56 655.5 Tm (added at each step, so that sampling becomes an iterative denoising procedure. This note) Tj
+/F1 11 Tf 1 0 0 1 56 640 Tm (summarizes the core ideas for a first reading.) Tj
+/F1 12 Tf 1 0 0 1 56 618.5 Tm (1. The Forward Process) Tj
+/F1 11 Tf 1 0 0 1 56 599 Tm (The forward process is a Markov chain that corrupts an image x0 over T steps with a) Tj
+/F1 11 Tf 1 0 0 1 56 583.5 Tm (variance schedule. At each step, Gaussian noise is added according to q\(xt | xt-1\) =) Tj
+/F1 11 Tf 1 0 0 1 56 568 Tm (N\(xt; sqrt\(1 - beta_t\) * xt-1, beta_t I\). A key algebraic property is that any) Tj
+/F1 11 Tf 1 0 0 1 56 552.5 Tm (intermediate step can be sampled in closed form using the cumulative products alpha_t,) Tj
+/F1 11 Tf 1 0 0 1 56 537 Tm (which makes training efficient because the model never needs to simulate the full chain.) Tj
+/F1 11 Tf 1 0 0 1 56 515.5 Tm (The noise schedule beta_t is typically small early and larger later. Choosing this) Tj
+/F1 11 Tf 1 0 0 1 56 500 Tm (schedule is a bias-variance trade-off: too aggressive a schedule destroys semantic) Tj
+/F1 11 Tf 1 0 0 1 56 484.5 Tm (structure before the network can learn it, while too conservative a schedule wastes) Tj
+/F1 11 Tf 1 0 0 1 56 469 Tm (computation.) Tj
+/F1 12 Tf 1 0 0 1 56 447.5 Tm (2. The Reverse Process and Training Objective) Tj
+/F1 11 Tf 1 0 0 1 56 428 Tm (The reverse process is also modeled as Gaussian, but its mean is produced by a U-Net) Tj
+/F1 11 Tf 1 0 0 1 56 412.5 Tm (epsilon_theta. Ho et al. \(2020\) showed that predicting the noise itself, rather than the) Tj
+/F1 11 Tf 1 0 0 1 56 397 Tm (mean, yields a simplified loss: L_simple = E || epsilon - epsilon_theta\(xt, t\) ||^2.) Tj
+/F1 11 Tf 1 0 0 1 56 381.5 Tm (This reweighting behaves like a form of denoising score matching and is the de facto) Tj
+/F1 11 Tf 1 0 0 1 56 366 Tm (standard objective.) Tj
+ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 1500 >>
+stream
+BT
+/F1 12 Tf 1 0 0 1 56 736 Tm (3. Connection to Score Matching) Tj
+/F1 11 Tf 1 0 0 1 56 716.5 Tm (Song and Ermon connected diffusion to score-based generative modeling: the score) Tj
+/F1 11 Tf 1 0 0 1 56 701 Tm (function grad log p\(x\) can be estimated by the same denoiser, and annealed Langevin) Tj
+/F1 11 Tf 1 0 0 1 56 685.5 Tm (dynamics recover samples. This viewpoint explains why the noise levels act as a) Tj
+/F1 11 Tf 1 0 0 1 56 670 Tm (temperature ladder covering different scales of the data distribution.) Tj
+/F1 12 Tf 1 0 0 1 56 648.5 Tm (4. Practical Notes for Readers) Tj
+/F1 11 Tf 1 0 0 1 56 629 Tm (When reading papers in this family, keep three quantities apart: the closed-form) Tj
+/F1 11 Tf 1 0 0 1 56 613.5 Tm (posterior q\(xt-1 | xt, x0\), the learned reverse kernel p_theta\(xt-1 | xt\), and the) Tj
+/F1 11 Tf 1 0 0 1 56 598 Tm (evidence lower bound \(ELBO\) used for variational interpretation. Most derivations are) Tj
+/F1 11 Tf 1 0 0 1 56 582.5 Tm (algebraic manipulations of these three objects plus the Gaussian KL divergence.) Tj
+/F1 11 Tf 1 0 0 1 56 561 Tm (For a first pass, focus on the simplified objective and the sampling algorithm; the full) Tj
+/F1 11 Tf 1 0 0 1 56 545.5 Tm (ELBO decomposition can be deferred. The essential skill is translating between the) Tj
+/F1 11 Tf 1 0 0 1 56 530 Tm (continuous-time SDE formulation and the discrete-time Markov chain, since recent papers) Tj
+/F1 11 Tf 1 0 0 1 56 514.5 Tm (freely switch between the two notations.) Tj
+ET
+endstream
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000191 00000 n 
+0000000317 00000 n 
+0000002623 00000 n 
+0000002749 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+4300
+%%EOF
