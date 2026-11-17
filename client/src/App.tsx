@@ -3,6 +3,7 @@ import { useStore } from './store'
 import { CanvasStage } from './canvas/CanvasStage'
 import { SelectionToolbar } from './ui/SelectionToolbar'
 import { TopBar } from './ui/TopBar'
+import { KnowledgeLibrary } from './knowledge/KnowledgeLibrary'
 import { QuestionComposer } from './ui/QuestionComposer'
 import { SettingsDialog } from './ui/SettingsDialog'
 import { Controls, HelpOverlay, Toast } from './ui/Controls'
@@ -155,6 +156,7 @@ export default function App() {
     <div className="app">
       <CanvasStage />
       <TopBar />
+      <KnowledgeLibrary />
       <SelectionToolbar />
       <Controls />
       {!docId && <QuestionComposer key={conversationId} />}

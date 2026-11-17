@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import * as api from '../api'
+import { useLibrary } from '../knowledge/library'
 
 /** 顶部浮动胶囊：文档名 / 文档切换 / 设置 / 帮助 */
 export function TopBar() {
@@ -89,6 +90,7 @@ export function TopBar() {
       {doc && <span className="doc-name">{doc.title}</span>}
 
       <div className="topbar-right">
+        <button className="pill-btn" onClick={() => useLibrary.getState().setOpen(true)}>知识库</button>
         <div className="dropdown" ref={historyRef}>
           <button className="pill-btn" aria-expanded={historyOpen} onClick={() => { setHistoryOpen(v => !v); setMenuOpen(false) }}>对话</button>
           {historyOpen && (

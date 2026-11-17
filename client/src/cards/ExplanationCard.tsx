@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Card } from '../types'
 import { useStore } from '../store'
 import { CardBody } from './CardBody'
+import { useLibrary } from '../knowledge/library'
 import { animateBranchClose } from './animateBranchClose'
 
 const resizeHandles = [
@@ -163,6 +164,17 @@ export function ExplanationCard({ card }: { card: Card }) {
           {card.sourceMarkId && (
             <button onClick={() => { locateMark(card.sourceMarkId!); setCardMenuFor(null) }}>⌖ 定位原文标注</button>
           )}
+          <details className="card-collect">
+            <summary>加入知识库</summary>
+            <button disabled={card.status !== 'done'} onClick={() => {
+              setCardMenuFor(null)
+              useLibrary.getState().collect(card.id, false)
+            }}>仅收藏当前卡片</button>
+            <button disabled={card.status !== 'done'} onClick={() => {
+              setCardMenuFor(null)
+              useLibrary.getState().collect(card.id, true)
+            }}>收藏整条分支</button>
+          </details>
           <button onClick={() => reExplain(card.id)} disabled={card.status === 'streaming'}>重新讲解</button>
           <button onClick={() => setCardFontScale(card.id, -0.1)}>缩小文字</button>
           <button onClick={() => setCardFontScale(card.id, 0.1)}>放大文字</button>

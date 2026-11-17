@@ -148,3 +148,18 @@ export const streamFollowup = (payload: FollowupPayload, cbs: StreamCbs, signal?
   readSSE('/api/followup', payload, cbs, undefined, signal)
 
 export type { FollowUp }
+export async function summarizeKnowledge(node: { question: string; excerpt: string; content: string; followups: FollowUp[] }) {
+  const res = await fetch('/api/knowledge/summarize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      question: node.question.slice(0, 2000),
+      excerpt: node.excerpt.slice(0, 4000),
+      content: node.content.slice(0, 14000),
+      followups: node.followups.slice(-8).map(({ q, a }) => ({ q: q.slice(0, 500), a: a.slice(0, 1500) })),
+    }),
+  })
+  const result = await res.json()
+  if (!res.ok) throw new Error(result.error || '提炼失败，请重试。')
+  return result as { points: string[] }
+}
