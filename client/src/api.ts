@@ -159,7 +159,8 @@ export async function summarizeKnowledge(node: { question: string; excerpt: stri
       followups: node.followups.slice(-8).map(({ q, a }) => ({ q: q.slice(0, 500), a: a.slice(0, 1500) })),
     }),
   })
-  const result = await res.json()
-  if (!res.ok) throw new Error(result.error || '提炼失败，请重试。')
-  return result as { points: string[] }
+  const result: { error?: string; points?: string[] } | null = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(result?.error || '提炼服务没有正常响应，请重试。')
+  if (!Array.isArray(result?.points) || !result.points.length) throw new Error('未收到复习要点，请重试。')
+  return { points: result.points }
 }

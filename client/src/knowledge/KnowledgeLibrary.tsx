@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Markdown } from '../cards/Markdown'
-import { generatePoints, generationKey, openKnowledgeSource, useGeneration, useLibrary } from './library'
+import { generatePoints, generationKey, knowledgeQuestion, openKnowledgeSource, useGeneration, useLibrary } from './library'
 import type { KnowledgeNode } from './library'
 
-function Branch({ node, childrenByParent, selected, choose }: {
+function Branch({ node, childrenByParent, selected, choose, parent }: {
   node: KnowledgeNode
+  parent?: KnowledgeNode
   childrenByParent: Map<string | null, KnowledgeNode[]>
   selected: string
   choose: (id: string) => void
@@ -20,12 +21,12 @@ function Branch({ node, childrenByParent, selected, choose }: {
         )}
         <button className="knowledge-node" aria-current={selected === node.id ? 'true' : undefined}
           onClick={() => choose(node.id)}>
-          {node.question}
+          {knowledgeQuestion(node, parent)}
           {node.points && <span className="knowledge-preview">{node.points.split('\n').find(line => line.trim())}</span>}
         </button>
       </div>
       {expanded && children.length > 0 && (
-        <ul>{children.map(child => <Branch key={child.id} node={child} childrenByParent={childrenByParent} selected={selected} choose={choose} />)}</ul>
+        <ul>{children.map(child => <Branch key={child.id} node={child} parent={node} childrenByParent={childrenByParent} selected={selected} choose={choose} />)}</ul>
       )}
     </li>
   )
@@ -38,6 +39,8 @@ export function KnowledgeLibrary() {
   const [sourceMessage, setSourceMessage] = useState('')
   const topic = topics.find(item => item.id === current)
   const node = topic?.nodes.find(item => item.id === selected) ?? topic?.nodes[0]
+  const parent = topic?.nodes.find(item => item.id === node?.parentId)
+  const title = node ? knowledgeQuestion(node, parent) : ''
   const key = topic && node ? generationKey(topic.id, node.id) : ''
   const pending = useGeneration(s => s.pending.includes(key))
   const error = useGeneration(s => s.errors[key])
@@ -99,7 +102,8 @@ export function KnowledgeLibrary() {
               ))}</ul>
             </section>
             <section className="knowledge-detail" key={key}>
-              <h3>{node.question}</h3>
+              <h3>{title}</h3>
+              {title !== node.question && <p className="knowledge-source">原问题：{node.question}</p>}
               <p className="knowledge-source">{node.source}</p>
               {node.excerpt && <blockquote>{node.excerpt}</blockquote>}
               <label htmlFor="knowledge-points">复习要点</label>
