@@ -11,6 +11,8 @@ export function CanvasStage() {
   const viewport = useStore(s => s.viewport)
   const cards = useStore(s => s.cards)
   const doc = useStore(s => s.doc)
+  const conversationId = useStore(s => s.conversationId)
+  const scope = doc?.id ?? conversationId
 
   const zoomAt = useStore(s => s.zoomAt)
   const panBy = useStore(s => s.panBy)
@@ -53,7 +55,7 @@ export function CanvasStage() {
   /* 空格按住 → 任意位置拖拽平移 */
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || isTyping(e.target)) return
+      if (e.code !== 'Space' || isControl(e.target)) return
       e.preventDefault()
       stageRef.current?.classList.add('space-pan')
     }
@@ -106,17 +108,18 @@ export function CanvasStage() {
         }}
       >
         <GridBackground />
-        <EdgeLayer />
-        {doc && <PdfNode />}
+        <EdgeLayer key={'edges-' + scope} />
+        {doc && <PdfNode key={doc.id} />}
+        <div key={'closing-' + scope} className="closing-cards" inert aria-hidden="true" />
         {Object.values(cards).map(c => (
-          <ExplanationCard key={c.id} card={c} />
+          <ExplanationCard key={scope + '-' + c.id} card={c} />
         ))}
       </div>
     </div>
   )
 }
 
-function isTyping(t: EventTarget | null) {
-  const el = t as HTMLElement | null
-  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+function isControl(target: EventTarget | null) {
+  return target instanceof HTMLElement &&
+    (target.isContentEditable || !!target.closest('button, input, textarea, select, a[href]'))
 }

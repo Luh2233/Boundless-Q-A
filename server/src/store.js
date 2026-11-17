@@ -115,7 +115,24 @@ export async function getDoc(id) {
   }
 }
 
-export async function listDocs() {
+export async function findMatchingUpload(buffer) {
+  await ensure();
+  for (const file of await fsp.readdir(UPLOADS)) {
+    if (!file.endsWith('.pdf')) continue;
+    const id = file.slice(0, -4);
+    if (!isValidId(id)) continue;
+    try {
+      const path = pdfFile(id);
+      if ((await fsp.stat(path)).size !== buffer.length) continue;
+      if ((await fsp.readFile(path)).equals(buffer)) return id;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+  return null;
+}
+
+export async function listDocs({ withHistory = false } = {}) {
   await ensure();
   const files = (await fsp.readdir(DOCS)).filter(f => f.endsWith('.json') && !f.endsWith('.state.json'));
   const docs = [];
@@ -125,7 +142,9 @@ export async function listDocs() {
     if (!isValidId(id)) continue;
     try {
       const d = JSON.parse(await fsp.readFile(path.join(DOCS, f), 'utf8'));
-      docs.push({ id: d.id, title: d.title, numPages: d.pages?.length || 0, updatedAt: d.updatedAt || 0 });
+      const state = withHistory ? await getState(id) : null;
+      if (withHistory && !state?.cards?.length) continue;
+      docs.push({ id: d.id, title: d.title, numPages: d.pages?.length || 0, updatedAt: state?.savedAt || d.updatedAt || 0 });
     } catch { /* 跳过坏文件 */ }
   }
   docs.sort((a, b) => b.updatedAt - a.updatedAt);

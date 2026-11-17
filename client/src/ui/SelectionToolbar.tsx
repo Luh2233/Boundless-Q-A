@@ -1,39 +1,61 @@
+import { useLayoutEffect, useState } from 'react'
 import { useStore } from '../store'
+import type { SelectionPayload } from '../store'
 
-/** 划词后出现的浮动工具条：讲解 / 复制 */
 export function SelectionToolbar() {
-  const tb = useStore(s => s.selectionToolbar)
-  const explain = useStore(s => s.explainFromSelection)
-  const setToast = useStore(s => s.setToast)
-  if (!tb) return null
+  const selection = useStore(s => s.selectionToolbar)
+  return selection && <SelectionQuestion key={selection.text + ':' + selection.screen.x + ':' + selection.screen.y} selection={selection} />
+}
 
-  // 双向钳制进视口（选区贴近边缘/部分在视口外时工具条仍可点击）
-  const left = Math.min(Math.max(12, tb.screen.x + 10), window.innerWidth - 190)
-  const top = Math.min(Math.max(12, tb.screen.y + 10), window.innerHeight - 56)
+function SelectionQuestion({ selection }: { selection: SelectionPayload }) {
+  const [question, setQuestion] = useState('')
+  useLayoutEffect(() => {
+    if (typeof Highlight === 'undefined' || !CSS.highlights) return
+    CSS.highlights.set('pending-selection', new Highlight(selection.range))
+    return () => { CSS.highlights.delete('pending-selection') }
+  }, [selection.range])
+  const explain = useStore(s => s.explainFromSelection)
+  const dismiss = useStore(s => s.setSelectionToolbar)
+  const setToast = useStore(s => s.setToast)
+  const width = Math.min(424, window.innerWidth - 24)
+  const rect = selection.range.getBoundingClientRect()
+  const height = 86
+  const y = rect.bottom + 10 + height <= window.innerHeight - 12 ? rect.bottom + 10 : rect.top - height - 10
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))
+  const top = Math.max(12, Math.min(y, window.innerHeight - height - 12))
 
   return (
-    <div className="sel-toolbar" style={{ left, top }} onPointerDown={e => e.preventDefault()}>
-      <button
-        className="sel-primary"
-        onClick={() => explain()}
-        title="生成 AI 讲解卡片"
-      >
-        ✦ 讲解
-      </button>
-      <span className="sel-divider" />
-      <button
-        className="sel-copy"
-        onClick={() => {
-          navigator.clipboard?.writeText(tb.text).then(
-            () => setToast('已复制选中文本'),
-            () => setToast('复制失败', 'error'),
-          )
-          useStore.setState({ selectionToolbar: null })
-        }}
-      >
-        复制
-      </button>
-      <span className="sel-len">{tb.text.trim().length} 字</span>
-    </div>
+    <form className="sel-toolbar" style={{ left, top, width }} aria-label="针对选段提问"
+      onKeyDown={event => {
+        if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
+        event.stopPropagation()
+        document.getSelection()?.removeAllRanges()
+        dismiss(null)
+      }}
+      onSubmit={event => {
+        event.preventDefault()
+        if (question.trim()) void explain(question)
+      }}>
+      <div className="sel-quote" title={selection.text}>{selection.text}</div>
+      <div className="sel-form-row">
+        <input aria-label="关于这段文字的问题" placeholder="这段里，你想弄懂什么？"
+          value={question} maxLength={2000} onChange={event => setQuestion(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault()
+          }} />
+        <button type="submit" className="sel-primary" disabled={!question.trim()}>提问</button>
+        <button type="button" className="sel-copy"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(selection.text)
+              setToast('已复制选中文本')
+            } catch {
+              setToast('复制失败', 'error')
+            }
+          }}>
+          复制
+        </button>
+      </div>
+    </form>
   )
 }

@@ -15,11 +15,11 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 export const uploadPdf = (file: File) =>
   fetch('/api/upload', { method: 'POST', body: file }).then(async r => {
     if (!r.ok) throw new Error('上传失败')
-    return (await r.json()) as { id: string }
+    return (await r.json()) as { id: string; duplicate: boolean }
   })
 
 export const saveDocMeta = (doc: DocMeta) => json('/api/documents', { method: 'POST', body: JSON.stringify(doc) })
-export const listDocs = () => json<{ id: string; title: string; numPages: number; updatedAt: number }[]>('/api/documents')
+export const listDocs = (history = false) => json<{ id: string; title: string; numPages: number; updatedAt: number }[]>(history ? '/api/documents?history=1' : '/api/documents')
 export const getDoc = (id: string) => json<DocMeta>(`/api/documents/${id}`)
 export const deleteDoc = (id: string) => json(`/api/documents/${id}`, { method: 'DELETE' })
 export const getDocFileUrl = (id: string) => `/api/documents/${id}/file`
@@ -39,7 +39,7 @@ export const putDocState = (id: string, state: unknown, keepalive = false) =>
 
 interface SavedStateLite {
   viewport: Viewport
-  pdfNode: { x: number; y: number; width: number }
+  pdfNode: { x: number; y: number; width: number; scrollTop?: number; resized?: boolean }
   cards: Card[]
   marks: Mark[]
   cardSeq: number
@@ -59,7 +59,7 @@ interface StreamCbs {
   onError?: (msg: string) => void
 }
 
-async function readSSE(url: string, body: unknown, cbs: StreamCbs, onMemo?: (m: CardMemo) => void) {
+async function readSSE(url: string, body: unknown, cbs: StreamCbs, onMemo?: (m: CardMemo) => void, signal?: AbortSignal) {
   let finished = false
   const fail = (msg: string) => {
     if (!finished) {
@@ -73,6 +73,7 @@ async function readSSE(url: string, body: unknown, cbs: StreamCbs, onMemo?: (m: 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal,
     })
   } catch (e) {
     fail(String((e as Error).message || e))
@@ -100,7 +101,7 @@ async function readSSE(url: string, body: unknown, cbs: StreamCbs, onMemo?: (m: 
         if (!data) continue
         try {
           const ev = JSON.parse(data)
-          if (ev.type === 'delta' && ev.text) cbs.onDelta(ev.text)
+          if (ev.type === 'delta' && ev.text && !finished) cbs.onDelta(ev.text)
           else if (ev.type === 'memo' && onMemo && !finished) onMemo(ev.memo as CardMemo)
           else if (ev.type === 'done') {
             if (!finished) { finished = true; cbs.onDone?.() }
@@ -110,8 +111,7 @@ async function readSSE(url: string, body: unknown, cbs: StreamCbs, onMemo?: (m: 
       }
     }
     if (!finished) {
-      finished = true
-      cbs.onDone?.()
+      fail('连接中断，请重试。')
     }
   } catch (e) {
     fail(`连接中断：${String((e as Error).message || e)}`)
@@ -119,8 +119,8 @@ async function readSSE(url: string, body: unknown, cbs: StreamCbs, onMemo?: (m: 
 }
 
 export interface ExplainPayload {
-  docId: string
-  selectionText: string
+  docId?: string
+  selectionText?: string
   sourceDesc: string
   page?: number
   contextText?: string
@@ -130,11 +130,11 @@ export interface ExplainPayload {
   ancestors: { id: string; content: string; sourceText: string }[]
 }
 
-export const streamExplain = (payload: ExplainPayload, cbs: StreamCbs, onMemo?: (m: CardMemo) => void) =>
-  readSSE('/api/explain', payload, cbs, onMemo)
+export const streamExplain = (payload: ExplainPayload, cbs: StreamCbs, onMemo?: (m: CardMemo) => void, signal?: AbortSignal) =>
+  readSSE('/api/explain', payload, cbs, onMemo, signal)
 
 export interface FollowupPayload {
-  docId: string
+  docId?: string
   cardId: string
   question: string
   content: string
@@ -144,7 +144,7 @@ export interface FollowupPayload {
   cards: { id: number; depth: number; summary: string; concepts: string[] }[]
 }
 
-export const streamFollowup = (payload: FollowupPayload, cbs: StreamCbs) =>
-  readSSE('/api/followup', payload, cbs)
+export const streamFollowup = (payload: FollowupPayload, cbs: StreamCbs, signal?: AbortSignal) =>
+  readSSE('/api/followup', payload, cbs, undefined, signal)
 
 export type { FollowUp }

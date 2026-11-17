@@ -167,6 +167,16 @@ test('buildFollowupMessages: 追问记录最多带最近 8 条', () => {
   assert.ok(!user.includes('问0\n'));
 });
 
+test('buildExplainMessages: 无论文也能直接回答问题', () => {
+  const [system, user] = buildExplainMessages(null, { question: '为什么天空是蓝色的？' });
+  assert.match(system.content, /直接回答用户的问题/);
+  assert.match(user.content, /为什么天空是蓝色的？/);
+  assert.doesNotMatch(user.content, /论文文本/);
+  const { body, memo } = parseMemo(mockExplain({ question: '为什么天空是蓝色的？' }));
+  assert.match(body, /演示模式/);
+  assert.equal(memo.summary, '为什么天空是蓝色的？');
+});
+
 /* ---------------- 演示模式 ---------------- */
 
 test('mockExplain 产出能被 parseMemo 正确分离', () => {

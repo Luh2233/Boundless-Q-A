@@ -49,6 +49,8 @@ export interface Card {
   x: number
   y: number
   width: number
+  height?: number
+  question?: string
   fontScale: number
   depth: number
   sourceMarkId: string | null
@@ -71,7 +73,7 @@ export interface DocMeta {
 
 export interface SavedState {
   viewport: Viewport
-  pdfNode: { x: number; y: number; width: number }
+  pdfNode: { x: number; y: number; width: number; scrollTop?: number; resized?: boolean }
   cards: Card[]
   marks: Mark[]
   cardSeq: number

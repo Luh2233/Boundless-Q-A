@@ -6,7 +6,6 @@ interface EdgePath {
   id: string
   markId: string
   cardId: string
-  depth: number
   d: string
   ax: number
   ay: number
@@ -34,17 +33,26 @@ function computeEdges(): EdgePath[] {
 
     const a = elWorldRect(anchorEl, viewport)
     const c = elWorldRect(cardEl, viewport)
-    const ax = a.x + a.w / 2 < c.x ? a.x + a.w : a.x
-    const ay = a.y + a.h / 2
-    const bx = ax < c.x ? c.x - 5 : c.x + c.w + 5
-    const by = clamp(ay, c.y + 26, c.y + Math.max(52, c.h - 26))
-    const cp = Math.max(36, Math.abs(bx - ax) * 0.45)
+    const sourceCenter = a.x + a.w / 2
+    const targetCenter = c.x + c.w / 2
+    const direction = targetCenter >= sourceCenter ? 1 : -1
+    const ax = direction === 1 ? a.x + a.w : a.x
+    const clip = anchorEl.closest('.card-body-wrap, .pdf-pages')
+    const visible = clip ? elWorldRect(clip, viewport) : null
+    if (m.kind === 'pdf' && visible && (a.y + a.h <= visible.y || a.y >= visible.y + visible.h)) continue
+    const ay = visible ? clamp(a.y + a.h + (m.kind === 'pdf' ? 0 : 3), visible.y, visible.y + visible.h) : a.y + a.h / 2
+    const bx = direction === 1 ? c.x - 2 : c.x + c.w + 2
+    const by = clamp(ay, c.y + 22, c.y + c.h - 16)
+    const owner = visible ? anchorEl.closest('[data-card-root], [data-pdf-root]') : null
+    const ownerRect = owner ? elWorldRect(owner, viewport) : null
+    const exit = ownerRect ? (direction === 1 ? ownerRect.x + ownerRect.w : ownerRect.x) : ax
+    const bend = direction * (bx - exit) > 12 ? exit : ax
+    const cp = Math.max(18, Math.abs(bx - bend) * 0.42) * direction
     out.push({
       id: m.id,
       markId: m.id,
       cardId: card.id,
-      depth: m.depth,
-      d: `M ${ax.toFixed(1)} ${ay.toFixed(1)} C ${(ax + cp).toFixed(1)} ${ay.toFixed(1)}, ${(bx - cp).toFixed(1)} ${by.toFixed(1)}, ${bx.toFixed(1)} ${by.toFixed(1)}`,
+      d: `M ${ax.toFixed(1)} ${ay.toFixed(1)} H ${bend.toFixed(1)} C ${(bend + cp).toFixed(1)} ${ay.toFixed(1)}, ${(bx - cp).toFixed(1)} ${by.toFixed(1)}, ${bx.toFixed(1)} ${by.toFixed(1)}`,
       ax, ay, bx, by,
     })
   }
@@ -71,22 +79,18 @@ export function EdgeLayer() {
   }, [])
 
   return (
-    <svg className="edge-layer" style={{ overflow: 'visible' }}>
+    <svg aria-hidden="true" className="edge-layer" style={{ overflow: 'visible' }}>
       {paths.map(p => {
         const active = hover?.cardId === p.cardId || hover?.markId === p.markId
         return (
-          <g
-            key={p.id}
-            className={`edge d${Math.min(p.depth, 5)}${active ? ' active' : ''}`}
-            onPointerEnter={() => useStore.getState().setHover({ markId: p.markId, cardId: p.cardId })}
-            onPointerLeave={() => useStore.getState().setHover(null)}
-          >
+          <g key={p.id} data-edge-card={p.cardId} className={`edge${active ? ' active' : ''}`}>
             <path d={p.d} />
             <circle cx={p.ax} cy={p.ay} r={3.2} className="edge-dot" />
             <circle cx={p.bx} cy={p.by} r={2.4} className="edge-dot end" />
           </g>
         )
       })}
+      <g className="closing-edges" />
     </svg>
   )
 }

@@ -1,65 +1,42 @@
 // DOM 文本范围 → <mark> 标注 的封装与按文本重定位（刷新后恢复）
 
-function covered(range: Range, node: Text): boolean {
-  const r = document.createRange()
-  r.selectNodeContents(node)
-  return (
-    range.compareBoundaryPoints(Range.START_TO_START, r) <= 0 &&
-    range.compareBoundaryPoints(Range.END_TO_END, r) >= 0
-  )
-}
-
-/**
- * 把 range 覆盖的文本节点包裹成 <mark class="cmark" data-mark-id>
- * 返回第一个（DOM 顺序）标注元素，供关联线锚定。
- */
+/** 在拆分节点之前记录偏移，避免 DOM 变动改变选区边界。 */
 export function wrapRangeWithMark(range: Range, markId: string, depth: number): HTMLElement | null {
-  const cac = range.commonAncestorContainer
-  const root = (cac.nodeType === 3 ? (cac as Text).parentNode : cac) as HTMLElement
-  if (!root) return null
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: n => ((n as Text).length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
-  })
-  const inside: Text[] = []
-  let n: Node | null
-  while ((n = walker.nextNode())) {
-    const t = n as Text
-    if (range.intersectsNode(t)) inside.push(t)
-  }
-  if (!inside.length) return null
-
-  // 拆分首尾边界（splitText 会自动调整 range 的边界点）
-  const sc = range.startContainer
-  if (sc.nodeType === 3) {
-    const i = inside.indexOf(sc as Text)
-    if (i >= 0 && range.startOffset > 0) {
-      const t = sc as Text
-      const right = t.splitText(range.startOffset)
-      inside[i] = right
+  const ancestor = range.commonAncestorContainer
+  const walker = document.createTreeWalker(ancestor, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  if (ancestor instanceof Text) nodes.push(ancestor)
+  else {
+    let node: Node | null
+    while ((node = walker.nextNode())) {
+      if (range.intersectsNode(node)) nodes.push(node as Text)
     }
   }
-  const ec = range.endContainer
-  if (ec.nodeType === 3) {
-    const i = inside.indexOf(ec as Text)
-    if (i >= 0) {
-      const t = ec as Text
-      if (range.endOffset < t.length) t.splitText(range.endOffset)
-    }
-  }
-
-  const wrapped: HTMLElement[] = []
-  for (const t of inside) {
-    if (!t.parentNode || !t.textContent || !t.textContent.trim()) continue
-    if (!covered(range, t)) continue
+  const slices = nodes.map(node => ({
+    node,
+    start: node === range.startContainer ? range.startOffset : 0,
+    end: node === range.endContainer ? range.endOffset : node.length,
+  }))
+  let anchor: HTMLElement | null = null
+  for (const { node, start, end } of slices) {
+    if (!node.data.slice(start, end).trim()) continue
+    if (end < node.length) node.splitText(end)
+    const selected = start ? node.splitText(start) : node
     const mark = document.createElement('mark')
     mark.className = `cmark d${Math.min(depth, 5)}`
     mark.dataset.markId = markId
-    t.parentNode.insertBefore(mark, t)
-    mark.appendChild(t)
-    wrapped.push(mark)
+    selected.before(mark)
+    mark.append(selected)
+    anchor ??= mark
   }
-  if (wrapped.length) wrapped[0].dataset.markAnchor = markId
-  return wrapped[0] || null
+  if (anchor) anchor.dataset.markAnchor = markId
+  return anchor
+}
+
+export function unwrapMark(markId: string) {
+  for (const mark of document.querySelectorAll(`[data-mark-id="${markId}"]`)) {
+    mark.replaceWith(...mark.childNodes)
+  }
 }
 
 const norm = (s: string) => s.replace(/\s+/g, '')

@@ -26,7 +26,7 @@ const SYSTEM_EXPLAIN = `你是「无界问答」画布上的论文讲解智能�
 - 若选段来自某张讲解卡片，会提供那张卡片及其上层卡片的完整内容
 
 ## 讲解要求
-1. 开头用一句加粗的话，直白回答「这段到底在讲什么」，不要复述原文。
+1. 若有用户的问题，开头直接回答问题，之后只展开回答所需的选段细节。若只有选段，用一句加粗的话讲明选段的核心意思。
 2. 然后用二级标题分小节展开：
    - **拆解**：选段里每个关键概念/术语，用大白话和贴切的类比讲透，必要时举个小例子。
    - **在论文中的位置**：这段在整个论证链条里起什么作用，与前后文、方法或实验的关系。
@@ -43,8 +43,15 @@ const SYSTEM_EXPLAIN = `你是「无界问答」画布上的论文讲解智能�
 {"summary":"不超过30字的卡片摘要","concepts":["关键词",...],"related":[相关卡片编号,...]}
 related 只能从「画布记忆」列出的编号中选取；没有就给空数组。不要输出 JSON 之外的任何解释。`;
 
-const SYSTEM_FOLLOWUP = `你是「无界问答」的论文讲解智能体。用户正在一张讲解卡片下追问。
-你拥有：论文全文、该卡片的原始讲解内容、此前该卡片下的追问记录。
+const SYSTEM_QUESTION = `你是「无界问答」画布上的讲解助手。用中文直接回答用户的问题，或结合上层讲解解释用户划选的文字。
+开头给出核心答案，再用清晰的分段、具体例子或必要的公式帮助理解。数学表达式使用 $...$ 或 $$...$$。
+保持聚焦和简洁，区分事实和推测。已有画布卡片确实相关时可以提及。
+正文用 Markdown。正文之后另起一行输出 ---MEMO---，再输出一行 JSON：
+{"summary":"不超过30字的讲解标题","concepts":["关键词"],"related":[]}
+related 只填画布记忆中的相关卡片编号。`;
+
+const SYSTEM_FOLLOWUP = `你是「无界问答」的讲解助手。用户正在一张讲解卡片下追问。
+参考该卡片的讲解和已有追问；若提供了论文文本，也可以结合论文回答。
 请直接回答用户的问题：准确、聚焦，必要时给例子和公式（$...$ 或 $$...$$），
 若与画布上其他讲解相关可以顺带指出。用中文回答，术语标注英文。
 不要输出 ---MEMO--- 标记。`;
@@ -85,11 +92,14 @@ function memoryIndex(cards) {
 
 export function buildExplainMessages(doc, req = {}) {
   const selectionText = str(req.selectionText);
-  if (!selectionText.trim()) throw new Error('缺少选段内容');
+  const question = clip(req.question, LIMITS.question).trim();
+  if (!selectionText.trim() && !question) throw new Error('缺少选段内容或问题');
 
   const parts = [];
-  parts.push(`【论文】《${clip(doc?.title || '未命名文档', 200)}》`);
-  parts.push(`【论文文本】\n${docContext(doc, req.page)}`);
+  if (doc) {
+    parts.push(`【论文】《${clip(doc.title, 200)}》`);
+    parts.push(`【论文文本】\n${docContext(doc, req.page)}`);
+  }
 
   const ancestors = Array.isArray(req.ancestors) ? req.ancestors.slice(-LIMITS.ancestors) : [];
   if (ancestors.length) {
@@ -102,14 +112,13 @@ export function buildExplainMessages(doc, req = {}) {
   const memory = memoryIndex(req.cards);
   if (memory) parts.push(memory);
 
-  parts.push(`【本次要讲解的选段】（出处：${clip(req.sourceDesc, 120) || '论文'}）\n>>> ${clip(selectionText, LIMITS.selection)} <<<`);
+  if (selectionText.trim()) parts.push(`【本次要讲解的选段】（出处：${clip(req.sourceDesc, 120) || '论文'}）\n>>> ${clip(selectionText, LIMITS.selection)} <<<`);
   const contextText = clip(req.contextText, LIMITS.context);
   if (contextText) parts.push(`【选段前后文】\n${contextText}`);
-  const question = clip(req.question, LIMITS.question).trim();
-  if (question) parts.push(`【用户附加的问题】${question}`);
+  if (question) parts.push(`【用户的问题】${question}`);
 
   return [
-    { role: 'system', content: SYSTEM_EXPLAIN },
+    { role: 'system', content: doc ? SYSTEM_EXPLAIN : SYSTEM_QUESTION },
     { role: 'user', content: parts.join('\n\n') },
   ];
 }
@@ -119,8 +128,10 @@ export function buildFollowupMessages(doc, req = {}) {
   if (!question) throw new Error('缺少追问内容');
 
   const parts = [];
-  parts.push(`【论文】《${clip(doc?.title || '未命名文档', 200)}》`);
-  parts.push(`【论文文本】\n${docContext(doc, null)}`);
+  if (doc) {
+    parts.push(`【论文】《${clip(doc.title, 200)}》`);
+    parts.push(`【论文文本】\n${docContext(doc, null)}`);
+  }
 
   const memory = memoryIndex(req.cards);
   if (memory) parts.push(memory);
@@ -245,6 +256,21 @@ function esc(s) {
 }
 
 export function mockExplain(req = {}) {
+  if (!req.docId && (req.question || req.sourceCardId)) {
+    const text = clip(req.question || req.selectionText, 100).replace(/\s+/g, ' ');
+    const memo = { summary: clip(text, 30), concepts: [], related: [] };
+    return `**当前为演示模式。** 你刚刚提交了「${text}」。
+
+## 划选继续讲解
+
+你可以划选这段话里的任意词句，再输入具体问题，在画布上打开一个相连的小窗。
+
+配置模型后，回答会直接解释你的问题。打开右上角「设置」，填入模型服务地址、模型名称和 API Key。
+
+---MEMO---
+${JSON.stringify(memo)}`;
+  }
+
   const sel = (str(req.selectionText) || '选段').trim().replace(/\s+/g, ' ');
   const head = sel.length > 40 ? sel.slice(0, 40) + '…' : sel;
   return `**一句话：**「${esc(head)}」是${esc(req.sourceDesc || '论文')}中的一段关键表述，下面把它拆开讲清楚。
@@ -256,7 +282,7 @@ export function mockExplain(req = {}) {
 
 $$\\mathcal{L}_{\\text{simple}} = \\mathbb{E}_{t,\\,x_0,\\,\\epsilon}\\;\\bigl\\| \\epsilon - \\epsilon_\\theta(\\sqrt{\\bar\\alpha_t}\\,x_0 + \\sqrt{1-\\bar\\alpha_t}\\,\\epsilon,\\; t) \\bigr\\|^2$$
 
-## 在论文中的位置
+${req.question ? `> 你对选段的问题是：「${esc(clip(req.question, 120))}」。\n\n` : ''}## 在论文中的位置
 
 （演示模式）此处会说明该选段在整篇论文论证链条中的作用，以及它与引言、方法、实验部分的关系。
 

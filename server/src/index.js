@@ -167,6 +167,8 @@ const requireValidId = (req, res, next) => {
 // 只在本路由解析二进制体，并封顶 64MB；全局不再兜底吞任意类型的大包。
 const rawPdf = express.raw({ type: () => true, limit: UPLOAD_LIMIT });
 
+let uploadQueue = Promise.resolve();
+
 app.post('/api/upload', rawPdf, async (req, res) => {
   try {
     const buf = req.body;
@@ -176,9 +178,15 @@ app.post('/api/upload', rawPdf, async (req, res) => {
     if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') {
       return res.status(400).json({ error: '不是有效的 PDF 文件' });
     }
-    const id = crypto.randomUUID();
-    await store.saveUpload(id, buf);
-    res.json({ id });
+    const upload = uploadQueue.then(async () => {
+      const existing = await store.findMatchingUpload(buf);
+      if (existing) return { id: existing, duplicate: true };
+      const id = crypto.randomUUID();
+      await store.saveUpload(id, buf);
+      return { id, duplicate: false };
+    });
+    uploadQueue = upload.then(() => {}, () => {});
+    res.json(await upload);
   } catch (err) {
     res.status(500).json({ error: failMessage(err) });
   }
@@ -199,7 +207,7 @@ app.post('/api/documents', async (req, res) => {
 });
 
 app.get('/api/documents', async (req, res) => {
-  res.json(await store.listDocs());
+  res.json(await store.listDocs({ withHistory: req.query.history === '1' }));
 });
 
 app.get('/api/documents/:id', requireValidId, async (req, res) => {

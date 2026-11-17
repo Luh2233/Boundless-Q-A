@@ -7,7 +7,8 @@ import { findRangeByText, wrapRangeWithMark } from '../marks/wrapRange'
 /** 卡片正文：主讲解 + 追问记录；DOM 稳定以保住内联标注 */
 export function CardBody({ card }: { card: Card }) {
   const bodyRef = useRef<HTMLDivElement>(null)
-  const followEndRef = useRef<HTMLDivElement>(null)
+  const cards = useStore(s => s.cards)
+  const related = card.memo?.related.filter(id => cards[String(id)]) ?? []
   const done = card.status === 'done'
 
   /* 主讲解渲染完成后：恢复（重载后的）本卡片内容上的标注 */
@@ -35,19 +36,16 @@ export function CardBody({ card }: { card: Card }) {
     })
   }, [card.status, card.id])
 
-  /* 追问进行中时保持其可见：立即对齐一次 + ResizeObserver 跟随正文增长
-     （快速完成时多次 setState 可能合并，单靠 effect 会漏触发） */
   const hasPendingFollowup = card.followups.some(f => f.pending)
   useEffect(() => {
-    if (!hasPendingFollowup) return
-    if (followEndRef.current) useStore.getState().keepElementVisible(followEndRef.current)
     const body = bodyRef.current
-    if (!body || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => {
-      if (followEndRef.current) useStore.getState().keepElementVisible(followEndRef.current)
-    })
-    ro.observe(body)
-    return () => ro.disconnect()
+    const scroller = body?.parentElement
+    if (!hasPendingFollowup || !body || !scroller) return
+    const showFollowup = () => { scroller.scrollTop = scroller.scrollHeight }
+    showFollowup()
+    const observer = new ResizeObserver(showFollowup)
+    observer.observe(body)
+    return () => observer.disconnect()
   }, [hasPendingFollowup])
 
   return (
@@ -57,7 +55,7 @@ export function CardBody({ card }: { card: Card }) {
       ref={bodyRef}
       style={{ fontSize: `${15 * card.fontScale}px` }}
     >
-      <Markdown source={card.content} />
+      <Markdown key={done ? 'done' : 'generating'} source={card.content} />
       {card.status === 'streaming' && !card.content && (
         <div className="card-loading">
           <span className="dot" /><span className="dot" /><span className="dot" />
@@ -70,7 +68,7 @@ export function CardBody({ card }: { card: Card }) {
       {card.followups.length > 0 && (
         <div className="followups">
           {card.followups.map((f, i) => (
-            <div className="followup" key={i}>
+            <div className="followup" key={i} data-pending={f.pending ? true : undefined}>
               <div className="fu-q">问 · {f.q}</div>
               <div className="fu-a">
                 <Markdown source={f.a} />
@@ -78,12 +76,11 @@ export function CardBody({ card }: { card: Card }) {
               </div>
             </div>
           ))}
-          <div ref={followEndRef} />
         </div>
       )}
-      {card.memo?.related?.length ? (
+      {related.length > 0 ? (
         <div className="card-related">
-          {card.memo.related.map(rid => (
+          {related.map(rid => (
             <button
               key={rid}
               className="related-chip"

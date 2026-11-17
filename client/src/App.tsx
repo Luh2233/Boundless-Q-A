@@ -1,20 +1,22 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from './store'
 import { CanvasStage } from './canvas/CanvasStage'
 import { SelectionToolbar } from './ui/SelectionToolbar'
 import { TopBar } from './ui/TopBar'
-import { EmptyState } from './ui/EmptyState'
+import { QuestionComposer } from './ui/QuestionComposer'
 import { SettingsDialog } from './ui/SettingsDialog'
-import { Controls, HelpOverlay, Toast, HintBar } from './ui/Controls'
+import { Controls, HelpOverlay, Toast } from './ui/Controls'
 
 /** 全局划词监听：选区落在 PDF 文本层或某张已完成卡片的正文里 → 弹出「讲解」工具条 */
 function useGlobalSelection() {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>
+    let pointerId: number | null = null
     const hide = () => {
       if (useStore.getState().selectionToolbar) useStore.setState({ selectionToolbar: null })
     }
     const check = () => {
+      if (pointerId !== null || document.activeElement?.closest('.sel-toolbar')) return
       const sel = document.getSelection()
       const st = useStore.getState()
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return hide()
@@ -39,18 +41,23 @@ function useGlobalSelection() {
         const cardId = (aCard as HTMLElement).dataset.cardBody!
         const card = st.cards[cardId]
         if (!card || card.status !== 'done') return hide()
+        if (Array.from(aCard.querySelectorAll('[data-pending]')).some(el => range.intersectsNode(el))) return hide()
         owner = { type: 'card', cardId }
       }
       if (!owner) return hide()
 
       const text = sel.toString()
-      if (text.trim().length < 2) return hide()
+      if (!text.trim()) return hide()
 
       const rect = range.getBoundingClientRect()
       // 选区完全在视口外（平移后）不弹工具条
       if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) {
         return hide()
       }
+      const previous = st.selectionToolbar
+      if (previous && previous.text === text && previous.range.commonAncestorContainer.isConnected &&
+          previous.range.compareBoundaryPoints(Range.START_TO_START, range) === 0 &&
+          previous.range.compareBoundaryPoints(Range.END_TO_END, range) === 0) return
       useStore.setState({
         selectionToolbar: {
           text,
@@ -61,28 +68,76 @@ function useGlobalSelection() {
       })
     }
     const onSelChange = () => {
+      if (pointerId !== null) return
       clearTimeout(timer)
       timer = setTimeout(check, 140)
     }
-    const onPointerUp = () => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!event.isPrimary || event.button !== 0) return
+      if (event.target instanceof Element && event.target.closest('.sel-toolbar')) return
+      pointerId = event.pointerId
       clearTimeout(timer)
-      timer = setTimeout(check, 10)
+      hide()
+    }
+    const onPointerUp = (event: PointerEvent) => {
+      if (event.pointerId !== pointerId || event.button !== 0) return
+      pointerId = null
+      clearTimeout(timer)
+      timer = setTimeout(check, 0)
+    }
+    const resetPointer = () => {
+      pointerId = null
+      clearTimeout(timer)
+    }
+    const onPointerCancel = (event: PointerEvent) => {
+      if (event.pointerId === pointerId) resetPointer()
     }
     document.addEventListener('selectionchange', onSelChange)
-    document.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('pointerup', onPointerUp, true)
+    window.addEventListener('pointercancel', onPointerCancel, true)
+    window.addEventListener('blur', resetPointer)
     return () => {
-      clearTimeout(timer)
+      resetPointer()
       document.removeEventListener('selectionchange', onSelChange)
-      document.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('pointerup', onPointerUp, true)
+      window.removeEventListener('pointercancel', onPointerCancel, true)
+      window.removeEventListener('blur', resetPointer)
     }
   }, [])
 }
 
 export default function App() {
-  const doc = useStore(s => s.doc)
+  const docId = useStore(s => s.doc?.id)
   const loading = useStore(s => s.loading)
   const loadMsg = useStore(s => s.loadMsg)
   useGlobalSelection()
+  const [dropActive, setDropActive] = useState(false)
+  const conversationId = useStore(s => s.conversationId)
+  useEffect(() => {
+    const over = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
+      e.preventDefault()
+      setDropActive(true)
+    }
+    const leave = (e: DragEvent) => { if (!e.relatedTarget) setDropActive(false) }
+    const drop = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
+      e.preventDefault()
+      setDropActive(false)
+      const file = e.dataTransfer.files[0]
+      if (file) void useStore.getState().importFile(file)
+    }
+    window.addEventListener('dragover', over)
+    window.addEventListener('dragleave', leave)
+    window.addEventListener('drop', drop)
+    return () => {
+      window.removeEventListener('dragover', over)
+      window.removeEventListener('dragleave', leave)
+      window.removeEventListener('drop', drop)
+    }
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -98,20 +153,12 @@ export default function App() {
 
   return (
     <div className="app">
-      {doc ? (
-        <>
-          <CanvasStage />
-          <TopBar />
-          <SelectionToolbar />
-          <Controls />
-          <HintBar />
-        </>
-      ) : (
-        <>
-          <EmptyState />
-          <TopBar />
-        </>
-      )}
+      <CanvasStage />
+      <TopBar />
+      <SelectionToolbar />
+      <Controls />
+      {!docId && <QuestionComposer key={conversationId} />}
+      {dropActive && <div className="pdf-drop-overlay">松开鼠标，导入 PDF</div>}
       <SettingsDialog />
       <HelpOverlay />
       <Toast />
