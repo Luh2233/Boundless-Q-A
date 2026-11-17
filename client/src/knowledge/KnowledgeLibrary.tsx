@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Markdown } from '../cards/Markdown'
-import { generatePoints, generationKey, knowledgeQuestion, openKnowledgeSource, useGeneration, useLibrary } from './library'
+import { generatePoints, generationKey, knowledgeQuestion, needsQuestionContext, openKnowledgeSource, useGeneration, useLibrary } from './library'
 import type { KnowledgeNode } from './library'
 
-function Branch({ node, childrenByParent, selected, choose, parent }: {
+function Branch({ node, childrenByParent, selected, choose }: {
   node: KnowledgeNode
-  parent?: KnowledgeNode
   childrenByParent: Map<string | null, KnowledgeNode[]>
   selected: string
   choose: (id: string) => void
@@ -21,12 +20,12 @@ function Branch({ node, childrenByParent, selected, choose, parent }: {
         )}
         <button className="knowledge-node" aria-current={selected === node.id ? 'true' : undefined}
           onClick={() => choose(node.id)}>
-          {knowledgeQuestion(node, parent)}
+          {knowledgeQuestion(node)}
           {node.points && <span className="knowledge-preview">{node.points.split('\n').find(line => line.trim())}</span>}
         </button>
       </div>
       {expanded && children.length > 0 && (
-        <ul>{children.map(child => <Branch key={child.id} node={child} parent={node} childrenByParent={childrenByParent} selected={selected} choose={choose} />)}</ul>
+        <ul>{children.map(child => <Branch key={child.id} node={child} childrenByParent={childrenByParent} selected={selected} choose={choose} />)}</ul>
       )}
     </li>
   )
@@ -39,8 +38,7 @@ export function KnowledgeLibrary() {
   const [sourceMessage, setSourceMessage] = useState('')
   const topic = topics.find(item => item.id === current)
   const node = topic?.nodes.find(item => item.id === selected) ?? topic?.nodes[0]
-  const parent = topic?.nodes.find(item => item.id === node?.parentId)
-  const title = node ? knowledgeQuestion(node, parent) : ''
+  const title = node ? knowledgeQuestion(node) : ''
   const key = topic && node ? generationKey(topic.id, node.id) : ''
   const pending = useGeneration(s => s.pending.includes(key))
   const error = useGeneration(s => s.errors[key])
@@ -72,7 +70,7 @@ export function KnowledgeLibrary() {
               select(item.id)
               setSelected('')
               setSourceMessage('')
-            }}>{item.title}</button>
+            }}>{item.nodes[0]?.reviewQuestion && item.title === item.nodes[0].question ? item.nodes[0].reviewQuestion : item.title}</button>
           ))}
         </nav>
         {topic && node ? (
@@ -112,6 +110,11 @@ export function KnowledgeLibrary() {
                   ...item, nodes: item.nodes.map(entry => entry.id === node.id ? { ...entry, points: event.target.value } : entry),
                 }))} />
               <div className="knowledge-actions">
+                {needsQuestionContext(node) && (node.excerpt || node.parentTitle || node.parentId) && (
+                  <button className="ghost-btn" disabled={pending} onClick={() => void generatePoints(topic, node, true)}>
+                    补全问题
+                  </button>
+                )}
                 <button className="ghost-btn" disabled={pending || !node.content.trim()} onClick={() => {
                   if (!node.points || confirm('重新提炼并替换现有复习要点？')) void generatePoints(topic, node)
                 }}>{pending ? '正在提炼…' : node.points ? '重新提炼' : 'AI 提炼'}</button>

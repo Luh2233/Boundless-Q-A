@@ -8,6 +8,8 @@ export interface KnowledgeNode {
   parentId: string | null
   question: string
   parentTitle?: string
+  parentContent?: string
+  reviewQuestion?: string
   excerpt: string
   content: string
   followups: FollowUp[]
@@ -87,6 +89,7 @@ export const useLibrary = create<Library>((set, get) => ({
         parentId: card.id === root.id ? null : card.parentId,
         question: card.question || (!mark ? card.sourceText : '这段文字是什么意思？') || card.title,
         parentTitle: parent?.title,
+        parentContent: parent?.content.slice(0, 4500),
         excerpt: mark?.text ?? '',
         content: card.content,
         followups: card.followups.map(({ q, a }) => ({ q, a })),
@@ -97,7 +100,7 @@ export const useLibrary = create<Library>((set, get) => ({
         points: '',
       }
     })
-    const topic = { id: crypto.randomUUID(), title: knowledgeQuestion(nodes[0]) || root.title || root.sourceText, docId: state.doc?.id ?? null, conversationId: state.conversationId, nodes }
+    const topic = { id: crypto.randomUUID(), title: nodes[0].question || root.title || root.sourceText, docId: state.doc?.id ?? null, conversationId: state.conversationId, nodes }
     if (!save([topic, ...get().topics])) return
     set({ open: true, current: topic.id })
     void generateTopic(topic, cards.filter(card => card.status === 'done').map(card => card.id))
@@ -130,26 +133,37 @@ export function generationKey(topicId: string, nodeId: string) {
   return topicId + ':' + nodeId
 }
 
-export function knowledgeQuestion(node: KnowledgeNode, parent?: KnowledgeNode) {
-  const question = node.question.trim().replace(/^#{1,6}\s+/, '').trim()
-  if (!/^(?:(?:请问|那么)[，,\s]*)?(?:这(?:个|里|段(?:话|文字)?|句话|些)?|那(?:个|段|句话)?|它|其)(?:[\s，,]*(?:是|指|有什么|怎么|如何|为什么|为何|啥|什么意思|又))/.test(question)) return question
-  const excerpt = node.excerpt.replace(/\s+/g, ' ').trim()
-  const context = excerpt || node.parentTitle || parent?.question
-  if (!context) return question
-  const label = context.length > 52 ? context.slice(0, 52) + '…' : context
-  return `关于「${label}」：${question}`
+const plainQuestion = (question: string) => question.trim().replace(/^#{1,6}\s+/, '').trim()
+
+export function needsQuestionContext(node: KnowledgeNode) {
+  return !node.reviewQuestion &&
+    /^(?:(?:请问|那么)[，,\s]*)?(?:这(?:个|里|段(?:话|文字)?|句话|些)?|那(?:个|段|句话)?|它|其)[\s，,]*(?:是|指|有什么|怎么|如何|为什么|为何|啥|什么意思|又)/.test(plainQuestion(node.question))
 }
 
-export async function generatePoints(topic: Topic, node: KnowledgeNode) {
+export function knowledgeQuestion(node: KnowledgeNode) {
+  return node.reviewQuestion || plainQuestion(node.question)
+}
+
+export async function generatePoints(topic: Topic, node: KnowledgeNode, questionOnly = false) {
   const key = generationKey(topic.id, node.id)
   if (useGeneration.getState().pending.includes(key)) return false
   useGeneration.setState(s => ({ pending: [...s.pending, key], errors: { ...s.errors, [key]: '' } }))
   try {
     const parent = topic.nodes.find(item => item.id === node.parentId)
-    const { points } = await summarizeKnowledge({ ...node, question: knowledgeQuestion(node, parent) })
+    const { points, reviewQuestion } = await summarizeKnowledge({
+      ...node,
+      question: plainQuestion(node.question),
+      parentTitle: node.parentTitle || parent?.question,
+      parentContent: node.parentContent || parent?.content,
+      rewriteQuestion: needsQuestionContext(node),
+      questionOnly,
+    })
     return useLibrary.getState().update(topic.id, item => ({
-      ...item, nodes: item.nodes.map(current => current.id === node.id && current.points === node.points
-        ? { ...current, points: points.join('\n') } : current),
+      ...item, nodes: item.nodes.map(current => current.id === node.id ? {
+        ...current,
+        points: !questionOnly && current.points === node.points ? points.join('\n') : current.points,
+        reviewQuestion: current.reviewQuestion || reviewQuestion,
+      } : current),
     }))
   } catch (error) {
     useGeneration.setState(s => ({ errors: { ...s.errors, [key]: (error as Error).message } }))

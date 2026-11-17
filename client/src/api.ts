@@ -148,19 +148,23 @@ export const streamFollowup = (payload: FollowupPayload, cbs: StreamCbs, signal?
   readSSE('/api/followup', payload, cbs, undefined, signal)
 
 export type { FollowUp }
-export async function summarizeKnowledge(node: { question: string; excerpt: string; content: string; followups: FollowUp[] }) {
+export async function summarizeKnowledge(node: { question: string; excerpt: string; content: string; followups: FollowUp[]; parentTitle?: string; parentContent?: string; rewriteQuestion: boolean; questionOnly: boolean }) {
   const res = await fetch('/api/knowledge/summarize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       question: node.question.slice(0, 2000),
       excerpt: node.excerpt.slice(0, 4000),
+      parentTitle: node.parentTitle?.slice(0, 500),
+      parentContent: node.parentContent?.slice(0, 4500),
+      rewriteQuestion: node.rewriteQuestion,
+      questionOnly: node.questionOnly,
       content: node.content.slice(0, 14000),
       followups: node.followups.slice(-8).map(({ q, a }) => ({ q: q.slice(0, 500), a: a.slice(0, 1500) })),
     }),
   })
-  const result: { error?: string; points?: string[] } | null = await res.json().catch(() => null)
+  const result: { error?: string; points?: string[]; reviewQuestion?: string } | null = await res.json().catch(() => null)
   if (!res.ok) throw new Error(result?.error || '提炼服务没有正常响应，请重试。')
-  if (!Array.isArray(result?.points) || !result.points.length) throw new Error('未收到复习要点，请重试。')
-  return { points: result.points }
+  if (!Array.isArray(result?.points) || (!node.questionOnly && !result.points.length)) throw new Error('未收到复习要点，请重试。')
+  return { points: result.points, reviewQuestion: result.reviewQuestion }
 }
