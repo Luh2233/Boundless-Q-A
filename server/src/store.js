@@ -5,6 +5,7 @@
 // - apiKey 以 AES-256-GCM 加密后落盘（见 keyvault.js），旧版明文配置在读取时自动迁移。
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isValidId, safePath, InvalidIdError } from './ids.js';
@@ -19,6 +20,8 @@ const DOCS = path.join(DATA, 'docs');
 const UPLOADS = path.join(DATA, 'uploads');
 const CONFIG = path.join(DATA, 'config.json');
 const SECRET = path.join(DATA, '.secret');
+const CHATGPT_SESSION = path.join(DATA, 'chatgpt.session');
+const CHATGPT_LOGIN = path.join(DATA, 'chatgpt.login');
 
 const DEFAULT_CONFIG = {
   baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
@@ -42,9 +45,9 @@ function secret() {
   return secretPromise;
 }
 
-async function writeConfig({ baseUrl, model, apiKeyEnc }) {
+async function writeConfig({ baseUrl, model, apiKeyEnc, mode, chatgptModel, chatgptEffort }) {
   await ensure();
-  const body = { baseUrl, model, apiKeyEnc: apiKeyEnc || '' };
+  const body = { baseUrl, model, apiKeyEnc: apiKeyEnc || '', mode, chatgptModel, chatgptEffort };
   await fsp.writeFile(CONFIG, JSON.stringify(body, null, 2), 'utf8');
 }
 
@@ -57,6 +60,11 @@ export async function getConfig() {
 
   const baseUrl = typeof raw.baseUrl === 'string' && raw.baseUrl ? raw.baseUrl : DEFAULT_CONFIG.baseUrl;
   const model = typeof raw.model === 'string' && raw.model ? raw.model : DEFAULT_CONFIG.model;
+  const prefs = {
+    mode: raw.mode === 'chatgpt' ? 'chatgpt' : 'api',
+    chatgptModel: raw.chatgptModel || '',
+    chatgptEffort: raw.chatgptEffort || '',
+  };
 
   const s = await secret();
   let apiKey = decryptSecret(raw.apiKeyEnc, s);
@@ -64,15 +72,18 @@ export async function getConfig() {
   // 旧版明文 apiKey：读到就迁移为密文，并抹掉明文
   if (!apiKey && typeof raw.apiKey === 'string' && raw.apiKey) {
     apiKey = raw.apiKey;
-    await writeConfig({ baseUrl, model, apiKeyEnc: encryptSecret(apiKey, s) });
+    await writeConfig({ baseUrl, model, ...prefs, apiKeyEnc: encryptSecret(apiKey, s) });
   }
 
-  return { baseUrl, model, apiKey };
+  return { baseUrl, model, apiKey, ...prefs };
 }
 
 /** 对外响应用的投影：永不回传密钥本体。 */
 export function redactConfig(cfg) {
-  return { baseUrl: cfg.baseUrl, model: cfg.model, hasKey: !!cfg.apiKey, demo: !cfg.apiKey };
+  return {
+    baseUrl: cfg.baseUrl, model: cfg.model, hasKey: !!cfg.apiKey, demo: cfg.mode === 'api' && !cfg.apiKey,
+    mode: cfg.mode, chatgptModel: cfg.chatgptModel, chatgptEffort: cfg.chatgptEffort,
+  };
 }
 
 export async function saveConfig(patch = {}) {
@@ -85,9 +96,40 @@ export async function saveConfig(patch = {}) {
   // 空值不覆盖已有 key（与旧行为一致）
   else if (typeof patch.apiKey === 'string' && patch.apiKey.trim()) apiKey = patch.apiKey.trim();
 
-  await writeConfig({ baseUrl, model, apiKeyEnc: encryptSecret(apiKey, await secret()) });
-  return { baseUrl, model, apiKey };
+  const next = {
+    baseUrl, model, apiKey,
+    mode: patch.mode ?? cur.mode,
+    chatgptModel: patch.chatgptModel ?? cur.chatgptModel,
+    chatgptEffort: patch.chatgptEffort ?? cur.chatgptEffort,
+  };
+  await writeConfig({ ...next, apiKeyEnc: encryptSecret(apiKey, await secret()) });
+  return next;
 }
+
+async function readProtectedJson(file) {
+  try {
+    const stored = await fsp.readFile(file, 'utf8');
+    return JSON.parse(decryptSecret(stored, await secret()));
+  } catch {
+    return null;
+  }
+}
+
+async function writeProtectedJson(file, value) {
+  const temp = `${file}.${randomUUID()}.tmp`;
+  await ensure();
+  try {
+    await fsp.writeFile(temp, encryptSecret(JSON.stringify(value), await secret()), { mode: 0o600 });
+    await fsp.rename(temp, file);
+  } finally {
+    await fsp.rm(temp, { force: true });
+  }
+}
+
+export const readChatGPTSession = () => readProtectedJson(CHATGPT_SESSION);
+export const writeChatGPTSession = session => writeProtectedJson(CHATGPT_SESSION, session);
+export const readChatGPTLogin = () => readProtectedJson(CHATGPT_LOGIN);
+export const writeChatGPTLogin = login => writeProtectedJson(CHATGPT_LOGIN, login);
 
 /* ---------------- 文档 ---------------- */
 
@@ -151,23 +193,55 @@ export async function listDocs({ withHistory = false } = {}) {
   return docs;
 }
 
+const stateWrites = new Map();
+
+async function queueStateWrite(id, action) {
+  const write = (stateWrites.get(id) ?? Promise.resolve()).then(action);
+  const tail = write.then(() => {}, () => {});
+  stateWrites.set(id, tail);
+  try {
+    return await write;
+  } finally {
+    if (stateWrites.get(id) === tail) stateWrites.delete(id);
+  }
+}
+
 export async function deleteDoc(id) {
   const targets = [docFile(id), stateFile(id), pdfFile(id)];
-  for (const f of targets) await fsp.rm(f, { force: true });
+  await queueStateWrite(id, async () => {
+    for (const file of targets) await fsp.rm(file, { force: true });
+  });
 }
 
 export async function saveState(id, state) {
-  await ensure();
   const file = stateFile(id);
-  await fsp.writeFile(file, JSON.stringify({ ...state, savedAt: Date.now() }), 'utf8');
+  return queueStateWrite(id, async () => {
+    try {
+      await fsp.access(docFile(id));
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    try {
+      await fsp.writeFile(temporary, JSON.stringify({ ...state, savedAt: Date.now() }), 'utf8');
+      await fsp.rename(temporary, file);
+    } catch (error) {
+      await fsp.rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
+    return true;
+  });
 }
 
 export async function getState(id) {
   const file = stateFile(id);
+  await stateWrites.get(id);
   try {
     return JSON.parse(await fsp.readFile(file, 'utf8'));
-  } catch {
-    return null;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
   }
 }
 

@@ -6,8 +6,10 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
+    strictPort: true,
     proxy: {
-      '/api': 'http://localhost:8787',
+      '/api': 'http://127.0.0.1:8787',
+      '/auth/callback': 'http://127.0.0.1:8787',
     },
   },
 })

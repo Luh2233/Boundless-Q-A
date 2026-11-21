@@ -150,10 +150,14 @@ export function TopBar() {
                     onClick={async e => {
                       e.stopPropagation()
                       if (!confirm(`删除文档「${d.title}」及其全部讲解？`)) return
-                      await api.deleteDoc(d.id)
-                      if (d.id === doc?.id) closeDoc(false)
-                      setDocs(ds => ds.filter(x => x.id !== d.id))
-                      setDocHistory(items => items.filter(x => x.id !== d.id))
+                      try {
+                        await api.deleteDoc(d.id)
+                        if (d.id === useStore.getState().doc?.id) closeDoc(false)
+                        setDocs(ds => ds.filter(x => x.id !== d.id))
+                        setDocHistory(items => items.filter(x => x.id !== d.id))
+                      } catch {
+                        useStore.getState().setToast('删除文档失败，请重试。', 'error')
+                      }
                     }}
                   >✕</button>
                 </div>

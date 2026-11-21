@@ -40,6 +40,20 @@ test('不存在的文档返回 null，不抛错', async () => {
   assert.equal(await store.getState('00000000-0000-4000-8000-000000000000'), null);
 });
 
+test('同一 PDF 的并发保存按提交顺序完成，读取时得到完整的最新状态', async () => {
+  const first = store.saveState(DOC_ID, { cardSeq: 3, content: 'x'.repeat(1_500_000) });
+  const second = store.saveState(DOC_ID, { cardSeq: 4 });
+  const [snapshot] = await Promise.all([store.getState(DOC_ID), first, second]);
+  assert.equal(snapshot.cardSeq, 4);
+  assert.equal((await store.getState(DOC_ID)).cardSeq, 4);
+});
+
+test('状态文件损坏时返回读取错误，区别于没有历史状态的文档', async () => {
+  const damaged = 'damaged-state';
+  await fsp.writeFile(path.join(dir, 'docs', `${damaged}.state.json`), '{', 'utf8');
+  await assert.rejects(() => store.getState(damaged), SyntaxError);
+});
+
 test('穿越型 ID 被拒绝（读写删三条路径）', async () => {
   for (const bad of ['../../etc/passwd', '..', 'a/b', 'a\\b']) {
     await assert.rejects(() => store.getDoc(bad), InvalidIdError);
@@ -57,7 +71,10 @@ test('删除文档同时清掉状态与 PDF 原件', async () => {
   await store.saveState(other, { cardSeq: 1 });
   await store.saveUpload(other, Buffer.from('%PDF-1.4 test'));
 
-  await store.deleteDoc(other);
+  const deletion = store.deleteDoc(other);
+  const lateSave = store.saveState(other, { cardSeq: 2 });
+  await deletion;
+  assert.equal(await lateSave, false);
   assert.equal(await store.getDoc(other), null);
   assert.equal(await store.getState(other), null);
   assert.equal((await store.listDocs()).some(d => d.id === other), false);

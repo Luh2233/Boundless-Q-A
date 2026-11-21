@@ -1,5 +1,4 @@
-import { useStore } from '../store'
-import { pdfViewerHeight } from '../store'
+import { PDF_MAX_HEIGHT, PDF_MIN_HEIGHT, pdfViewerHeight, useStore } from '../store'
 import { PdfPage } from './PdfPage'
 import { bindPdfSelection } from './pdfPointerSelection'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -10,9 +9,10 @@ export function PdfNode() {
   const pdfNode = useStore(s => s.pdfNode)
   const ratio = useStore(s => s.pdfPageRatio)
   const resizePdf = useStore(s => s.resizePdf)
+  const resizePdfHeight = useStore(s => s.resizePdfHeight)
   const [gutter, setGutter] = useState(24)
   const pageWidth = pdfNode.width - gutter
-  const viewHeight = pdfViewerHeight(pdfNode.width, ratio) + (24 - gutter) * ratio
+  const viewHeight = pdfViewerHeight(pdfNode, ratio, gutter)
   const anchor = useRef<{ index: number; fraction: number } | null>(null)
   const movePdfNode = useStore(s => s.movePdfNode)
   const numPages = doc?.pages.length ?? 0
@@ -68,7 +68,7 @@ export function PdfNode() {
     resizePdf(width)
   }
 
-  const resizeFromCorner = (event: React.PointerEvent<HTMLDivElement>) => {
+  const dragResize = (event: React.PointerEvent<HTMLDivElement>, resize: (dx: number, dy: number) => void) => {
     if (event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
@@ -77,8 +77,7 @@ export function PdfNode() {
     const scale = useStore.getState().viewport.scale
     const move = (e: PointerEvent) => {
       if (e.pointerId !== pointerId) return
-      const delta = ((e.clientX - clientX) + (e.clientY - clientY) * ratio) / (1 + ratio * ratio)
-      zoom(pdfNode.width + delta / scale)
+      resize((e.clientX - clientX) / scale, (e.clientY - clientY) / scale)
     }
     const end = () => {
       handle.removeEventListener('pointermove', move)
@@ -87,6 +86,11 @@ export function PdfNode() {
     handle.setPointerCapture(pointerId)
     handle.addEventListener('pointermove', move)
     handle.addEventListener('lostpointercapture', end)
+  }
+
+  const resizeFromCorner = (event: React.PointerEvent<HTMLDivElement>) => {
+    const windowRatio = pdfNode.height === undefined ? ratio : viewHeight / pdfNode.width
+    dragResize(event, (dx, dy) => zoom(pdfNode.width + (dx + dy * windowRatio) / (1 + windowRatio * windowRatio)))
   }
 
   const jump = (raw: string) => {
@@ -164,6 +168,23 @@ export function PdfNode() {
         ))}
       </div>
       <div className="pdf-resize" title="拖动缩放 PDF" onPointerDown={resizeFromCorner} />
+      {(['top', 'bottom'] as const).map(edge => {
+        const top = edge === 'top'
+        const label = `${top ? '向上' : '向下'}拖动调整 PDF 高度`
+        const resizeHeight = (dy: number) =>
+          resizePdfHeight(viewHeight + (top ? -dy : dy), top ? pdfNode.y + viewHeight : undefined)
+        return (
+          <div key={edge} className={`pdf-height-resize ${edge}`} title={label} aria-label={label}
+            role="separator" tabIndex={0} aria-valuemin={PDF_MIN_HEIGHT} aria-valuemax={PDF_MAX_HEIGHT}
+            aria-valuenow={Math.round(viewHeight)} aria-orientation="horizontal"
+            onPointerDown={event => dragResize(event, (_dx, dy) => resizeHeight(dy))}
+            onKeyDown={event => {
+              if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+              event.preventDefault()
+              resizeHeight(event.key === 'ArrowUp' ? -48 : 48)
+            }} />
+        )
+      })}
     </div>
   )
 }

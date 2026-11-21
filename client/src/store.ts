@@ -12,7 +12,10 @@ export const pdfRef: { pdf: any } = { pdf: null }
 
 export const DOC_WORLD_WIDTH = 820
 const PDF_TOOLBAR_HEIGHT = 54
-export const pdfViewerHeight = (width: number, ratio: number) => PDF_TOOLBAR_HEIGHT + (width - 24) * ratio + 24
+export const PDF_MIN_HEIGHT = 240
+export const PDF_MAX_HEIGHT = 4000
+export const pdfViewerHeight = (node: SavedState['pdfNode'], ratio: number, gutter = 24) =>
+  node.height ?? PDF_TOOLBAR_HEIGHT + (node.width - gutter) * ratio + 24
 const PDF_VIEWER_WIDTH = DOC_WORLD_WIDTH + 24
 const CARD_DEFAULT_WIDTH = 420
 
@@ -68,6 +71,7 @@ interface Store {
   switchConversation: (id?: string) => void
   deleteConversation: (id: string) => void
   resizePdf: (width: number) => void
+  resizePdfHeight: (height: number, fixedBottom?: number) => void
   savePdfScroll: (scrollTop: number) => void
   movePdfNode: (x: number, y: number) => void
   moveCard: (id: string, x: number, y: number) => void
@@ -80,7 +84,6 @@ interface Store {
   ask: (question: string) => Promise<void>
   explainFromSelection: (question: string) => Promise<void>
   followup: (cardId: string, question: string) => Promise<void>
-  reExplain: (cardId: string) => Promise<void>
   deleteCard: (id: string, onClose?: (branch: ReadonlyMap<string, number>) => void) => void
 
   setSelectionToolbar: (p: SelectionPayload | null) => void
@@ -161,8 +164,8 @@ function cancelRequests(ids?: Set<string>) {
 function restoreCard(card: Card): Card {
   return {
     ...card,
-    ...((card.status === 'streaming' || card.status === 'loading')
-      ? { status: 'error' as const, error: '生成已中断，请重新讲解。' }
+    ...((card.status === 'streaming' || card.status === 'loading' || card.error === '生成已中断，请重新讲解。')
+      ? { status: 'error' as const, error: '生成已中断。' }
       : {}),
     followups: card.followups.map(f => f.pending
       ? { ...f, pending: false, a: f.a || '生成已中断。' }
@@ -198,8 +201,13 @@ function persistNow(keepalive = false) {
     marks: Object.values(s.marks),
     cardSeq: s.cardSeq,
   }
-  if (s.doc) api.putDocState(s.doc.id, state, keepalive).catch(() => {})
-  else {
+  if (s.doc) {
+    const id = s.doc.id
+    api.putDocState(id, state, keepalive).catch(() => {
+      const current = useStore.getState()
+      if (!keepalive && current.doc?.id === id) current.setToast('文档讲解保存失败，请检查服务连接。', 'error')
+    })
+  } else {
     try { localStorage.setItem(conversationKey(s.conversationId), JSON.stringify(state)) } catch { /* 存储不可用 */ }
   }
 }
@@ -397,7 +405,7 @@ export const useStore = create<Store>((set, get) => ({
 
   fitDoc: () => {
     const { pdfNode, pdfPageRatio } = get()
-    const viewerHeight = pdfViewerHeight(pdfNode.width, pdfPageRatio)
+    const viewerHeight = pdfViewerHeight(pdfNode, pdfPageRatio)
     const r = document.getElementById('stage')!.getBoundingClientRect()
     const scale = clamp(Math.min((r.width - 40) / pdfNode.width, (r.height - 100) / viewerHeight), 0.15, 1.2)
     tweenTo({
@@ -469,7 +477,7 @@ export const useStore = create<Store>((set, get) => ({
       if (!res.ok) throw new Error('无法读取 PDF 文件')
       const buf = await res.arrayBuffer()
       const pdfjs: any = await import('pdfjs-dist')
-      const pdf = await pdfjs.getDocument({ data: buf }).promise
+      const pdf = await pdfjs.getDocument({ data: buf, isEvalSupported: false }).promise
 
       const firstPage = (await pdf.getPage(1)).getViewport({ scale: 1 })
       const pdfPageRatio = firstPage.height / firstPage.width
@@ -495,30 +503,28 @@ export const useStore = create<Store>((set, get) => ({
       let marks: Record<string, Mark> = {}
       let cardSeq = 0
       let viewport: Viewport | null = null
-      let pdfNode = { x: 0, y: 0, width: PDF_VIEWER_WIDTH }
-      try {
-        const { state } = await api.getDocState(id)
-        if (state) {
-          cardSeq = state.cardSeq || 0
-          pdfNode = state.pdfNode ? { ...state.pdfNode, width: state.pdfNode.resized ? clamp(state.pdfNode.width, 360, 1800) : PDF_VIEWER_WIDTH } : pdfNode
-          viewport = state.viewport
-          for (const c of state.cards || []) {
-            cards[c.id] = restoreCard(c)
-          }
-          for (const m of state.marks || []) {
-            if (m.kind === 'card') m.applied = false // 待 DOM 重建后重新定位
-            // 旧版 pdf 标注按行盒几何存储（雅黑行盒≈1.30em、基线≈盒顶+0.81h），
-            // 迁移为贴字形的墨迹带：基线−0.79em 起、高 1.02em ⇒ y += 0.21h、h ×0.79
-            if (m.kind === 'pdf' && !m.v2 && m.pages) {
-              for (const g of m.pages) {
-                g.rects = g.rects.map(r => ({ ...r, y: r.y + 0.21 * r.h, h: r.h * 0.79 }))
-              }
-              m.v2 = true
-            }
-            marks[m.id] = m
-          }
+      let pdfNode: SavedState['pdfNode'] = { x: 0, y: 0, width: PDF_VIEWER_WIDTH }
+      const { state } = await api.getDocState(id)
+      if (state) {
+        cardSeq = state.cardSeq || 0
+        pdfNode = state.pdfNode ? { ...state.pdfNode, width: state.pdfNode.resized ? clamp(state.pdfNode.width, 360, 1800) : PDF_VIEWER_WIDTH } : pdfNode
+        viewport = state.viewport
+        for (const c of state.cards || []) {
+          cards[c.id] = restoreCard(c)
         }
-      } catch { /* 无状态则全新画布 */ }
+        for (const m of state.marks || []) {
+          if (m.kind === 'card') m.applied = false // 待 DOM 重建后重新定位
+          // 旧版 pdf 标注按行盒几何存储（雅黑行盒≈1.30em、基线≈盒顶+0.81h），
+          // 迁移为贴字形的墨迹带：基线−0.79em 起、高 1.02em ⇒ y += 0.21h、h ×0.79
+          if (m.kind === 'pdf' && !m.v2 && m.pages) {
+            for (const g of m.pages) {
+              g.rects = g.rects.map(r => ({ ...r, y: r.y + 0.21 * r.h, h: r.h * 0.79 }))
+            }
+            m.v2 = true
+          }
+          marks[m.id] = m
+        }
+      }
 
       persistNow()
       cancelRequests()
@@ -526,7 +532,7 @@ export const useStore = create<Store>((set, get) => ({
       const stage = document.getElementById('stage')
       const width = stage?.clientWidth ?? window.innerWidth
       const height = stage?.clientHeight ?? window.innerHeight
-      const viewerHeight = pdfViewerHeight(pdfNode.width, pdfPageRatio)
+      const viewerHeight = pdfViewerHeight(pdfNode, pdfPageRatio)
       const scale = clamp(Math.min((width - 40) / pdfNode.width, (height - 100) / viewerHeight), 0.15, 1)
       pdfRef.pdf = pdf
       set(s => ({
@@ -585,10 +591,21 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   resizePdf: width => {
-    const st = get()
+    const { pdfNode } = get()
     const next = clamp(width, 360, 1800)
-    if (next === st.pdfNode.width) return
-    set({ pdfNode: { ...st.pdfNode, width: next, resized: true }, selectionToolbar: null })
+    if (next === pdfNode.width) return
+    const height = pdfNode.height === undefined ? undefined
+      : clamp(pdfNode.height * next / pdfNode.width, PDF_MIN_HEIGHT, PDF_MAX_HEIGHT)
+    set({ pdfNode: { ...pdfNode, width: next, height, resized: true }, selectionToolbar: null })
+    touch()
+  },
+
+  resizePdfHeight: (height, fixedBottom) => {
+    const { pdfNode } = get()
+    const next = clamp(height, PDF_MIN_HEIGHT, PDF_MAX_HEIGHT)
+    const y = fixedBottom === undefined ? pdfNode.y : fixedBottom - next
+    if (next === pdfNode.height && y === pdfNode.y) return
+    set({ pdfNode: { ...pdfNode, y, height: next }, selectionToolbar: null })
     touch()
   },
 
@@ -801,40 +818,6 @@ export const useStore = create<Store>((set, get) => ({
       return { cards: { ...s.cards, [cardId]: { ...c, followups } }, edgesVersion: s.edgesVersion + 1 }
     })
     touch()
-  },
-
-  reExplain: async cardId => {
-    const st = get()
-    const card = st.cards[cardId]
-    if (!card || card.status === 'streaming') return
-    const mark = card.sourceMarkId ? st.marks[card.sourceMarkId] : null
-    if (card.sourceMarkId && !mark) return
-    const marks = { ...st.marks }
-    for (const m of Object.values(marks)) {
-      if (m.kind !== 'card' || m.ownerCardId !== cardId) continue
-      unwrapMark(m.id)
-      marks[m.id] = { ...m, applied: false, dangling: false }
-    }
-    set({
-      cards: { ...st.cards, [cardId]: { ...card, content: '', status: 'streaming', memo: null, error: undefined } },
-      marks,
-      cardMenuFor: null,
-      selectionToolbar: null,
-    })
-    touch()
-    const page = mark?.pages?.[0]?.page
-    await generateCard(cardId, {
-      docId: st.doc?.id,
-      selectionText: mark?.text,
-      sourceCardId: mark?.ownerCardId,
-      question: mark ? card.question : card.sourceText,
-      sourceDesc: page ? `论文第${page}页` : mark ? `卡片#${mark.ownerCardId} 的讲解内容` : '用户提问',
-      page,
-      contextText: page ? contextAround(st.doc?.pages[page - 1]?.text || '', mark!.text)
-        : mark?.ownerCardId ? st.cards[mark.ownerCardId]?.content : undefined,
-      cards: buildCardsIndex(st).filter(c => c.id !== +cardId),
-      ancestors: mark?.ownerCardId ? ancestorChain(st, mark.ownerCardId) : [],
-    })
   },
 
   deleteCard: (id, onClose) => {

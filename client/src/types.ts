@@ -73,7 +73,7 @@ export interface DocMeta {
 
 export interface SavedState {
   viewport: Viewport
-  pdfNode: { x: number; y: number; width: number; scrollTop?: number; resized?: boolean }
+  pdfNode: { x: number; y: number; width: number; height?: number; scrollTop?: number; resized?: boolean }
   cards: Card[]
   marks: Mark[]
   cardSeq: number

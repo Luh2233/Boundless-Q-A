@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { useStore } from '../store'
 import type { Card, FollowUp } from '../types'
-import { summarizeKnowledge } from '../api'
+import { getConfig, summarizeKnowledge, type ModelMode } from '../api'
 
 export interface KnowledgeNode {
   id: string
@@ -36,6 +36,7 @@ interface Library {
   topics: Topic[]
   open: boolean
   current: string | null
+  saveError: string | null
   setOpen: (open: boolean) => void
   select: (id: string | null) => void
   collect: (cardId: string, branch: boolean) => void
@@ -46,10 +47,12 @@ interface Library {
 function save(topics: Topic[]) {
   try {
     localStorage.setItem(storageKey, JSON.stringify(topics))
-    useLibrary.setState({ topics })
+    useLibrary.setState({ topics, saveError: null })
     return true
   } catch {
-    useStore.getState().setToast('知识库保存失败，请检查浏览器存储空间。', 'error')
+    const message = '知识库保存失败，请检查浏览器存储空间。'
+    if (useLibrary.getState().open) useLibrary.setState({ saveError: message })
+    else useStore.getState().setToast(message, 'error')
     return false
   }
 }
@@ -58,6 +61,7 @@ export const useLibrary = create<Library>((set, get) => ({
   topics: readTopics(),
   open: false,
   current: null,
+  saveError: null,
   setOpen: open => set({ open }),
   select: current => set({ current }),
   collect: (cardId, branch) => {
@@ -79,6 +83,10 @@ export const useLibrary = create<Library>((set, get) => ({
         seen.add(child.id)
         cards.push(child)
       }
+    }
+    if (cards.some(card => card.status === 'streaming' || card.status === 'loading' || card.followups.some(entry => entry.pending))) {
+      state.setToast('请等讲解和追问生成完毕后再收藏。')
+      return
     }
     const nodes = cards.map(card => {
       const mark = card.sourceMarkId ? state.marks[card.sourceMarkId] : undefined
@@ -103,7 +111,7 @@ export const useLibrary = create<Library>((set, get) => ({
     const topic = { id: crypto.randomUUID(), title: nodes[0].question || root.title || root.sourceText, docId: state.doc?.id ?? null, conversationId: state.conversationId, nodes }
     if (!save([topic, ...get().topics])) return
     set({ open: true, current: topic.id })
-    void generateTopic(topic, cards.filter(card => card.status === 'done').map(card => card.id))
+    void generateTopic(topic, { automatic: true, expectedMode: 'api' }, cards.filter(card => card.status === 'done').map(card => card.id))
   },
   update: (id, change) => {
     const topics = get().topics
@@ -115,17 +123,40 @@ export const useLibrary = create<Library>((set, get) => ({
 }))
 
 interface Generation {
-  pending: string[]
+  queued: string[]
+  pending: Record<string, 'question' | 'points'>
   errors: Record<string, string>
 }
-export const useGeneration = create<Generation>(() => ({ pending: [], errors: {} }))
+export const useGeneration = create<Generation>(() => ({ queued: [], pending: {}, errors: {} }))
 
-async function generateTopic(topic: Topic, ids: string[]) {
-  for (const node of topic.nodes) {
-    if (!ids.includes(node.id) || !node.content.trim()) continue
-    if (!useLibrary.getState().topics.some(item => item.id === topic.id)) return
-    // Stop the batch on a service failure. Nodes can be retried individually.
-    if (!await generatePoints(topic, node)) return
+interface GenerationRequest { automatic?: boolean; expectedMode?: ModelMode }
+
+export async function generateTopic(topic: Topic, request: GenerationRequest, ids?: string[]) {
+  const eligible = ids && new Set(ids)
+  const state = useGeneration.getState()
+  const nodes = topic.nodes.filter(node => {
+    const key = generationKey(topic.id, node.id)
+    return (!eligible || eligible.has(node.id)) && node.content.trim() && !node.points.trim() &&
+      !state.queued.includes(key) && !state.pending[key]
+  })
+  const keys = new Set(nodes.map(node => generationKey(topic.id, node.id)))
+  useGeneration.setState(state => ({ queued: [...state.queued, ...keys] }))
+  try {
+    if (request.automatic && (await getConfig().catch(() => null))?.mode !== 'api') return
+    for (const node of nodes) {
+      const current = useLibrary.getState().topics.find(item => item.id === topic.id)
+      if (!current) return
+      const entry = current.nodes.find(item => item.id === node.id)
+      if (entry && !entry.points.trim()) {
+        const status = await generatePoints(current, entry, false, request)
+        if (status === 401 || status === 403 || status === 409 || status === 429 ||
+            (request.expectedMode === 'chatgpt' && (status === 502 || status === 503 || status === 504))) return
+      }
+      const key = generationKey(topic.id, node.id)
+      useGeneration.setState(state => ({ queued: state.queued.filter(item => item !== key) }))
+    }
+  } finally {
+    useGeneration.setState(state => ({ queued: state.queued.filter(key => !keys.has(key)) }))
   }
 }
 
@@ -135,30 +166,47 @@ export function generationKey(topicId: string, nodeId: string) {
 
 const plainQuestion = (question: string) => question.trim().replace(/^#{1,6}\s+/, '').trim()
 
-export function needsQuestionContext(node: KnowledgeNode) {
-  return !node.reviewQuestion &&
-    /^(?:(?:请问|那么)[，,\s]*)?(?:这(?:个|里|段(?:话|文字)?|句话|些)?|那(?:个|段|句话)?|它|其)[\s，,]*(?:是|指|有什么|怎么|如何|为什么|为何|啥|什么意思|又)/.test(plainQuestion(node.question))
+function completeOriginQuestion(node: KnowledgeNode, parent?: KnowledgeNode) {
+  const question = plainQuestion(node.question)
+  if (!/^(?:起源|由来)是什么[？?。]?$/.test(question)) return
+  const parentQuestion = node.parentTitle || parent?.question || node.source?.match(/^卡片「(.+)」$/)?.[1] || ''
+  const subject = plainQuestion(parentQuestion).match(/^([\p{L}\p{N}]{1,24})(?:有几种|有哪些种类|分为哪几类)[？?。]?$/u)?.[1]
+  if (!subject) return
+  return `${subject}的${question.replace(/[？?。]$/, '')}？`
 }
 
-export function knowledgeQuestion(node: KnowledgeNode) {
-  return node.reviewQuestion || plainQuestion(node.question)
+export function needsQuestionContext(node: KnowledgeNode, parent?: KnowledgeNode) {
+  if (node.reviewQuestion || completeOriginQuestion(node, parent)) return false
+  const question = plainQuestion(node.question)
+  const missingSubject = /^(?:起源|来源|由来|含义|定义|原理|原因|目的|作用|区别|影响|条件|过程|特点)(?:是什么|有哪些|有哪些呢|在哪(?:里)?)[？?。]?$/.test(question)
+  return missingSubject || /^(?:(?:请问|那么)[，,\s]*)?(?:这(?:个|里|段(?:话|文字)?|句话|些)?|那(?:个|段|句话)?|它|其)[\s，,]*(?:是|指|有什么|怎么|如何|为什么|为何|啥|什么意思|又)/.test(question)
 }
 
-export async function generatePoints(topic: Topic, node: KnowledgeNode, questionOnly = false) {
+export function knowledgeQuestion(node: KnowledgeNode, parent?: KnowledgeNode) {
+  return node.reviewQuestion || completeOriginQuestion(node, parent) || plainQuestion(node.question)
+}
+
+export function knowledgeTopicTitle(topic: Topic) {
+  const root = topic.nodes[0]
+  return root && topic.title === root.question ? knowledgeQuestion(root) : topic.title
+}
+
+export async function generatePoints(topic: Topic, node: KnowledgeNode, questionOnly = false, request?: GenerationRequest) {
   const key = generationKey(topic.id, node.id)
-  if (useGeneration.getState().pending.includes(key)) return false
-  useGeneration.setState(s => ({ pending: [...s.pending, key], errors: { ...s.errors, [key]: '' } }))
+  if (useGeneration.getState().pending[key]) return
+  useGeneration.setState(s => ({ pending: { ...s.pending, [key]: questionOnly ? 'question' : 'points' }, errors: { ...s.errors, [key]: '' } }))
   try {
     const parent = topic.nodes.find(item => item.id === node.parentId)
     const { points, reviewQuestion } = await summarizeKnowledge({
       ...node,
-      question: plainQuestion(node.question),
+      question: knowledgeQuestion(node, parent),
       parentTitle: node.parentTitle || parent?.question,
       parentContent: node.parentContent || parent?.content,
-      rewriteQuestion: needsQuestionContext(node),
+      rewriteQuestion: needsQuestionContext(node, parent),
       questionOnly,
+      ...request,
     })
-    return useLibrary.getState().update(topic.id, item => ({
+    useLibrary.getState().update(topic.id, item => ({
       ...item, nodes: item.nodes.map(current => current.id === node.id ? {
         ...current,
         points: !questionOnly && current.points === node.points ? points.join('\n') : current.points,
@@ -167,55 +215,12 @@ export async function generatePoints(topic: Topic, node: KnowledgeNode, question
     }))
   } catch (error) {
     useGeneration.setState(s => ({ errors: { ...s.errors, [key]: (error as Error).message } }))
-    return false
+    return (error as Error & { status?: number }).status
   } finally {
-    useGeneration.setState(s => ({ pending: s.pending.filter(item => item !== key) }))
+    useGeneration.setState(s => {
+      const pending = { ...s.pending }
+      delete pending[key]
+      return { pending }
+    })
   }
-}
-
-export async function openKnowledgeSource(topic: Topic, node: KnowledgeNode) {
-  const state = useStore.getState()
-  if (state.loading) return '正在打开文档，请稍候。'
-  if (topic.docId && state.doc?.id !== topic.docId) await state.openDoc(topic.docId)
-  if (!topic.docId && (state.doc || state.conversationId !== topic.conversationId)) {
-    if (!state.conversations.some(item => item.id === topic.conversationId)) {
-      return '原对话已删除，仍可查看知识快照。'
-    }
-    state.switchConversation(topic.conversationId)
-  }
-  const current = useStore.getState()
-  if (current.doc?.id !== (topic.docId ?? undefined) || (!topic.docId && current.conversationId !== topic.conversationId)) return '无法打开原出处，仍可查看知识快照。'
-  if (!current.cards[node.id] && !(node.ownerCardId && current.cards[node.ownerCardId])) {
-    return '原卡片已删除，仍可查看知识快照。'
-  }
-  useLibrary.getState().setOpen(false)
-  const mark = node.markId ? current.marks[node.markId] : undefined
-  const pageNumber = mark?.pages?.[0]?.page
-  const workspaceMatches = () => {
-    const state = useStore.getState()
-    return topic.docId ? state.doc?.id === topic.docId
-      : !state.doc && state.conversationId === topic.conversationId
-  }
-  const locate = (attempts: number) => {
-    if (!workspaceMatches()) return
-    if (mark && document.querySelector(`[data-mark-anchor="${mark.id}"]`)) {
-      current.locateMark(mark.id)
-      return
-    }
-    if (attempts > 0 && mark) {
-      window.setTimeout(() => locate(attempts - 1), 50)
-      return
-    }
-    if (pageNumber) {
-      const page = document.querySelector<HTMLElement>(`[data-page-index="${pageNumber}"]`)
-      const reader = page?.closest<HTMLElement>('.pdf-pages')
-      if (reader && page) {
-        reader.scrollTop = page.offsetTop - 12
-        current.fitDoc()
-        return
-      }
-    }
-    current.locateCard(current.cards[node.id] ? node.id : node.ownerCardId!)
-  }
-  requestAnimationFrame(() => requestAnimationFrame(() => locate(16)))
 }

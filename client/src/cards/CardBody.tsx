@@ -63,7 +63,7 @@ export function CardBody({ card }: { card: Card }) {
         </div>
       )}
       {card.status === 'error' && (
-        <div className="card-error">⚠️ {card.error || '生成失败，可从卡片菜单选择「重新讲解」'}</div>
+        <div className="card-error">⚠️ {card.error || '生成失败。'} 请关闭此小窗后重新提问。</div>
       )}
       {card.followups.length > 0 && (
         <div className="followups">

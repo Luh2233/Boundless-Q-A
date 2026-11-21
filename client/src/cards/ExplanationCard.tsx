@@ -19,7 +19,6 @@ export function ExplanationCard({ card }: { card: Card }) {
   const setCardFontScale = useStore(s => s.setCardFontScale)
   const followup = useStore(s => s.followup)
   const deleteCard = useStore(s => s.deleteCard)
-  const reExplain = useStore(s => s.reExplain)
   const locateMark = useStore(s => s.locateMark)
   const cardMenuFor = useStore(s => s.cardMenuFor)
   const setCardMenuFor = useStore(s => s.setCardMenuFor)
@@ -175,7 +174,6 @@ export function ExplanationCard({ card }: { card: Card }) {
               useLibrary.getState().collect(card.id, true)
             }}>收藏整条分支</button>
           </details>
-          <button onClick={() => reExplain(card.id)} disabled={card.status === 'streaming'}>重新讲解</button>
           <button onClick={() => setCardFontScale(card.id, -0.1)}>缩小文字</button>
           <button onClick={() => setCardFontScale(card.id, 0.1)}>放大文字</button>
         </div>
